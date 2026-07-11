@@ -1,0 +1,9 @@
+{
+  "item": {
+    "distDir": "./dist",
+    "buildCommand": "npm run build",
+    "title": "らくがきペン",
+    "description": "空中に線を描けるペン。スタンドをクリックで持つ/置く。VR: 右手トリガーで描く・グリップで1本取り消し / PC: 左ボタン長押しで動かして描く。パレットで色替え、黄ボタンで1本戻す、赤ボタンで全消し。線はインスタンス内の全員に同期され、後から入った人にも見えます。",
+    "thumbnailPath": "thumbnail.png"
+  }
+}
