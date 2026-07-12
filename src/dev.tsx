@@ -8,8 +8,19 @@
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { RigidBody } from '@react-three/rapier'
-import { DevEnvironment, ItemProvider, XRiftProvider, useUsers } from '@xrift/world-components'
+import {
+  DevEnvironment,
+  ItemProvider,
+  PlacementStateProvider,
+  XRiftProvider,
+  useUsers,
+} from '@xrift/world-components'
 import { Item } from './Item'
+
+/** `?preview` を付けて開くと設置プレビュー（張りぼて）モードを確認できる */
+const placementMode = new URLSearchParams(window.location.search).has('preview')
+  ? ('preview' as const)
+  : ('placed' as const)
 
 /**
  * XRiftProvider は UsersProvider を内包していて、素で被せると
@@ -29,12 +40,14 @@ const App = () => (
   <DevEnvironment camera={{ position: [0, 1.6, 2.5] }} spawnPosition={[0, 1, 2.5]}>
     <XRiftDevBridge>
       <ItemProvider id="dev-pen-item">
-        <Item
-          position={[0, 0, 0]}
-          debugApi={(api) => {
-            ;(window as unknown as Record<string, unknown>).__xpen = api
-          }}
-        />
+        <PlacementStateProvider mode={placementMode}>
+          <Item
+            position={[0, 0, 0]}
+            debugApi={(api) => {
+              ;(window as unknown as Record<string, unknown>).__xpen = api
+            }}
+          />
+        </PlacementStateProvider>
       </ItemProvider>
     </XRiftDevBridge>
 

@@ -8,6 +8,7 @@ import {
   useInstanceEvent,
   useInstanceState,
   useItem,
+  usePlacementState,
   useUsers,
 } from '@xrift/world-components'
 import { desktopHandApprox, handToWorld, handWorldQuaternion } from './pen/math'
@@ -80,7 +81,40 @@ const _penPos = new Vector3()
 const _viewOffset = new Vector3()
 const _lookM = new Matrix4()
 
-export const Item = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) => {
+export const Item = (props: ItemProps) => {
+  // 「ここに置く」の位置決め中（preview）は、物理コライダー・Interactable・
+  // ポータル・同期フックを一切持たない張りぼてを出す。実体はここで生やすと
+  // 設置レイキャストや確定クリックを自分自身で妨害してしまう
+  const { mode } = usePlacementState()
+  if (mode === 'preview') {
+    return <PenPreview position={props.position} scale={props.scale} />
+  }
+  return <PenLive {...props} />
+}
+
+/** 設置プレビュー用の見た目だけのスタンド（コライダー・インタラクションなし） */
+const PenPreview = ({ position = [0, 0, 0], scale = 1 }: Pick<ItemProps, 'position' | 'scale'>) => (
+  <group position={position} scale={scale}>
+    <mesh position={[0, 0.45, 0]}>
+      <cylinderGeometry args={[0.32, 0.4, 0.9, 24]} />
+      <meshStandardMaterial color="#3a3f4a" metalness={0.5} roughness={0.4} transparent opacity={0.8} />
+    </mesh>
+    <group position={[0, 1.05, 0]} rotation={[Math.PI / 2.4, 0, 0]}>
+      <PenMesh color={PEN_COLORS[5]} />
+    </group>
+    {PEN_COLORS.map((c, i) => {
+      const angle = (i / PEN_COLORS.length) * Math.PI * 2
+      return (
+        <mesh key={c} position={[Math.sin(angle) * 0.26, 0.93, Math.cos(angle) * 0.26]}>
+          <boxGeometry args={[0.07, 0.05, 0.07]} />
+          <meshStandardMaterial color={c} emissive={c} emissiveIntensity={0.35} />
+        </mesh>
+      )
+    })}
+  </group>
+)
+
+const PenLive = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) => {
   const { id } = useItem()
   const { localUser, getMovement, getLocalMovement, getAvatarHeight } = useUsers()
   const scene = useThree((s) => s.scene)
