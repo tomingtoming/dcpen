@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal, useFrame, useThree } from '@react-three/fiber'
 import { Line } from '@react-three/drei'
 import { RigidBody } from '@react-three/rapier'
-import { Group, Quaternion, Vector3 } from 'three'
+import { Group, Matrix4, Quaternion, Vector3 } from 'three'
 import {
   Interactable,
   useInstanceEvent,
@@ -75,6 +75,10 @@ interface ActiveStroke {
 
 const _tipQ = new Quaternion()
 const _dir = new Vector3()
+const _camPos = new Vector3()
+const _penPos = new Vector3()
+const _viewOffset = new Vector3()
+const _lookM = new Matrix4()
 
 export const Item = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) => {
   const { id } = useItem()
@@ -291,18 +295,27 @@ export const Item = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) =
       return
     }
 
-    // ペン先のワールド座標を求める
+    // ペン先のワールド座標を求める（ペン表示位置 _penPos は原則ペン先＝tip）
     let hasPose = false
+    _penPos.copy(tip.current)
     if (h === myIdRef.current) {
       const mv = getLocalMovement()
       if (mv.isInVR && mv.vrTracking) {
         hasPose = handToWorld(mv, 'right', tip.current)
+        _penPos.copy(tip.current)
         if (pen && handWorldQuaternion(mv, 'right', _tipQ)) pen.quaternion.copy(_tipQ)
       } else {
-        camera.getWorldPosition(tip.current)
+        // デスクトップ: インクは照準先に出しつつ、ペン本体はFPSの構えで
+        // 画面右下に置き、ペン先(-Z)を描画点へ向ける＝「持ってる」見た目
+        camera.getWorldPosition(_camPos)
         camera.getWorldDirection(_dir)
-        tip.current.addScaledVector(_dir, DESKTOP_DRAW_DISTANCE)
-        if (pen) pen.quaternion.copy(camera.quaternion)
+        tip.current.copy(_camPos).addScaledVector(_dir, DESKTOP_DRAW_DISTANCE)
+        _viewOffset.set(0.17, -0.11, -0.4).applyQuaternion(camera.quaternion)
+        _penPos.copy(_camPos).add(_viewOffset)
+        if (pen) {
+          _lookM.lookAt(_penPos, tip.current, camera.up)
+          pen.quaternion.setFromRotationMatrix(_lookM)
+        }
         hasPose = true
       }
     } else {
@@ -310,10 +323,12 @@ export const Item = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) =
       if (mv) {
         if (mv.isInVR && mv.vrTracking) {
           hasPose = handToWorld(mv, 'right', tip.current)
+          _penPos.copy(tip.current)
           if (pen && handWorldQuaternion(mv, 'right', _tipQ)) pen.quaternion.copy(_tipQ)
         } else {
           const eye = getAvatarHeight?.(h)?.eyeHeight ?? 1.3
           desktopHandApprox(mv, eye, tip.current)
+          _penPos.copy(tip.current)
           hasPose = true
         }
       }
@@ -321,7 +336,7 @@ export const Item = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) =
 
     if (pen) {
       pen.visible = hasPose
-      if (hasPose) pen.position.copy(tip.current)
+      if (hasPose) pen.position.copy(_penPos)
     }
 
     // 自分が描いている間だけ点を打つ

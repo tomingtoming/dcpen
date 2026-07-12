@@ -3,9 +3,16 @@ import path from 'path'
 import { defineConfig } from 'vite'
 import dts from 'vite-plugin-dts'
 import federation from '@originjs/vite-plugin-federation'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 export default defineConfig({
+  // LAN内の別PCからhttpsでdevプレビューするための設定（build成果物には影響しない）
+  server: {
+    host: true,
+    allowedHosts: true,
+  },
   plugins: [
+    basicSsl(),
     react(),
     dts({
       insertTypesEntry: true,
