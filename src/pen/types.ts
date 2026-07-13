@@ -24,8 +24,15 @@ export interface UndoEvent {
   sid: string
 }
 
-/** これ以上手が動いたら点を打つ（メートル） */
-export const MIN_SEGMENT = 0.015
+/**
+ * これ以上手が動いたら点を打つ（メートル）。
+ * 本家QvPenはTrailRenderer minVertexDistance=2µm＝実質毎フレーム打点の力技で滑らかさを
+ * 出している（プレハブ実測）。こちらは10mm間隔＋描画側Catmull-Rom補間(SMOOTH_DIV)で
+ * 同等の見た目を同期帯域ほぼ据え置きで得る方針。
+ */
+export const MIN_SEGMENT = 0.01
+/** 描画側スプライン補間の分割数（同期点1区間あたりの描画セグメント数） */
+export const SMOOTH_DIV = 4
 /** 1ストロークの最大点数 */
 export const MAX_POINTS_PER_STROKE = 2000
 /** インスタンス全体で保持する合計点数の予算（超えたら古いストロークから捨てる） */

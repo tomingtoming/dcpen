@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MutableRefObject, ReactNode } from 'react'
 import { createPortal, useFrame, useThree } from '@react-three/fiber'
 import { Line, Text } from '@react-three/drei'
-import { Color, Euler, Group, Matrix4, Mesh, Quaternion, Vector3 } from 'three'
+import { CatmullRomCurve3, Color, Euler, Group, Matrix4, Mesh, Quaternion, Vector3 } from 'three'
 import type { WebGLRenderer } from 'three'
 import {
   Interactable,
@@ -19,6 +19,7 @@ import {
   PEN_COLORS,
   RAINBOW,
   SEG_BATCH_POINTS,
+  SMOOTH_DIV,
   roundMm,
 } from './types'
 import type { EndEvent, SegEvent, Stroke, UndoEvent } from './types'
@@ -136,14 +137,49 @@ function toTuples(pts: number[]): [number, number, number][] {
 }
 
 const _rainbowC = new Color()
+/**
+ * 虹の色相の進み（描画頂点1つあたり）。旧実装は15mm間隔の点ごとに0.02＝約1.33周/m。
+ * 補間後の頂点間隔は MIN_SEGMENT/SMOOTH_DIV なので、同じ「周/m」になるよう換算する
+ */
+const RAINBOW_HUE_STEP = 0.02 * (MIN_SEGMENT / 0.015 / SMOOTH_DIV)
 /** 虹ペンの線: 点列に沿って色相が巡る頂点色 */
 function rainbowVertexColors(n: number): [number, number, number][] {
   const out: [number, number, number][] = []
   for (let i = 0; i < n; i++) {
-    _rainbowC.setHSL((i * 0.02) % 1, 1, 0.6)
+    _rainbowC.setHSL((i * RAINBOW_HUE_STEP) % 1, 1, 0.6)
     out.push([_rainbowC.r, _rainbowC.g, _rainbowC.b])
   }
   return out
+}
+
+/**
+ * 描画専用の平滑化＝同期点列(MIN_SEGMENT間隔)をCatmull-Romで通過補間して細分する。
+ * 同期・保存・消しゴム判定はすべて元の点列のまま＝見た目だけ滑らか（帯域ゼロ増）。
+ * centripetal型は不等間隔の手書き点でループ/オーバーシュートを起こさない定番。
+ * キャッシュは点数が変わったときだけ再計算（描画中ストロークは伸びるたび、完了線は1回きり）
+ */
+const _smoothCache = new Map<string, { n: number; pts: [number, number, number][] }>()
+function smoothPoints(key: string, raw: [number, number, number][]): [number, number, number][] {
+  if (raw.length < 3) return raw
+  const hit = _smoothCache.get(key)
+  if (hit && hit.n === raw.length) return hit.pts
+  const curve = new CatmullRomCurve3(
+    raw.map((p) => new Vector3(p[0], p[1], p[2])),
+    false,
+    'centripetal',
+  )
+  const pts = curve
+    .getPoints((raw.length - 1) * SMOOTH_DIV)
+    .map((v) => [v.x, v.y, v.z] as [number, number, number])
+  _smoothCache.set(key, { n: raw.length, pts })
+  return pts
+}
+/** 消えたストロークのキャッシュを間引く（合計線数の2倍を超えたら現存分だけ残す） */
+function pruneSmoothCache(liveKeys: Set<string>) {
+  if (_smoothCache.size <= liveKeys.size * 2 + 16) return
+  for (const k of _smoothCache.keys()) {
+    if (!liveKeys.has(k)) _smoothCache.delete(k)
+  }
 }
 
 interface ActiveStroke {
@@ -477,6 +513,7 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
 
   // ---- レイアウト（QvPenのラック風・机なし空中固定） ----
   const strokes = store.all()
+  pruneSmoothCache(new Set(strokes.map((s) => `${SYNC_ID}|${s.sid}`)))
   const penX = (i: number) => (i - (PEN_COUNT - 1) / 2) * 0.17
   const eraserX = (i: number) => penX(PEN_COUNT - 1) + 0.32 + i * 0.13
 
@@ -597,12 +634,13 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
         onInteract={putAwayAll}
       />
 
-      {/* ストロークはワールド座標なのでシーン直下に描く */}
+      {/* ストロークはワールド座標なのでシーン直下に描く（描画時のみスプライン細分） */}
       {createPortal(
         <group>
           {strokes.map((s) => {
-            const pts = toTuples(s.pts)
-            if (pts.length < 2) return null
+            const raw = toTuples(s.pts)
+            if (raw.length < 2) return null
+            const pts = smoothPoints(`${SYNC_ID}|${s.sid}`, raw)
             if (s.color === RAINBOW) {
               return (
                 <Line
