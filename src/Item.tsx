@@ -3,6 +3,7 @@ import { createPortal, useFrame, useThree } from '@react-three/fiber'
 import { Line } from '@react-three/drei'
 import { RigidBody } from '@react-three/rapier'
 import { Group, Matrix4, Quaternion, Vector3 } from 'three'
+import type { WebGLRenderer } from 'three'
 import {
   Interactable,
   useInstanceEvent,
@@ -80,6 +81,50 @@ const _camPos = new Vector3()
 const _penPos = new Vector3()
 const _viewOffset = new Vector3()
 const _lookM = new Matrix4()
+const _mHead = new Matrix4()
+const _mGrip = new Matrix4()
+const _mRig = new Matrix4()
+const _mOut = new Matrix4()
+const _gripFwd = new Vector3()
+
+/**
+ * ローカルVRの右手grip姿勢をWebXRのXRFrameから直接取る。
+ * 同期データ(vrTracking)のアバター相対→ワールド推定変換は本番で当てにならない
+ * （実測: 持った瞬間ペンがあらぬ座標へ飛んで見えなくなる）ため、
+ * 自分の手はレンダラの一次情報から求める。
+ * 座標系: gripはXR参照空間 → rig = headWorld × headLocal⁻¹ で世界系へ持ち上げる
+ */
+function localXrGripWorld(gl: WebGLRenderer, outPos: Vector3, outQuat: Quaternion): boolean {
+  const xr = gl.xr
+  if (!xr.isPresenting) return false
+  const session = xr.getSession()
+  if (!session) return false
+  const frame = xr.getFrame()
+  const refSpace = xr.getReferenceSpace()
+  if (!frame || !refSpace) return false
+  const viewerPose = frame.getViewerPose(refSpace)
+  if (!viewerPose) return false
+  let src: XRInputSource | null = null
+  for (const s of session.inputSources) {
+    if (s.handedness === 'right' && (s.gripSpace || s.targetRaySpace)) {
+      src = s
+      break
+    }
+  }
+  if (!src) return false
+  const space = src.gripSpace ?? src.targetRaySpace
+  const pose = frame.getPose(space, refSpace)
+  if (!pose) return false
+  _mHead.fromArray(Array.from(viewerPose.transform.matrix))
+  _mGrip.fromArray(Array.from(pose.transform.matrix))
+  // three側のXRカメラのmatrixWorldは頭のワールド姿勢（rig合成済み）
+  const headWorld = xr.getCamera().matrixWorld
+  _mRig.copy(headWorld).multiply(_mHead.invert())
+  _mOut.copy(_mRig).multiply(_mGrip)
+  outPos.setFromMatrixPosition(_mOut)
+  outQuat.setFromRotationMatrix(_mOut)
+  return true
+}
 
 export const Item = (props: ItemProps) => {
   // 「ここに置く」の位置決め中（preview）は、物理コライダー・Interactable・
@@ -337,7 +382,14 @@ const PenLive = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) => {
     _penPos.copy(tip.current)
     if (h === myIdRef.current) {
       const mv = getLocalMovement()
-      if (mv.isInVR && mv.vrTracking) {
+      if (mv.isInVR && localXrGripWorld(gl, _penPos, _tipQ)) {
+        // 自分のVRの手はXRFrameのgrip姿勢が一次情報。ペン先はgripのすこし前方(-Z)
+        _gripFwd.set(0, 0, -0.08).applyQuaternion(_tipQ)
+        tip.current.copy(_penPos).add(_gripFwd)
+        _penPos.copy(tip.current)
+        if (pen) pen.quaternion.copy(_tipQ)
+        hasPose = true
+      } else if (mv.isInVR && mv.vrTracking) {
         hasPose = handToWorld(mv, 'right', tip.current)
         _penPos.copy(tip.current)
         if (pen && handWorldQuaternion(mv, 'right', _tipQ)) pen.quaternion.copy(_tipQ)
