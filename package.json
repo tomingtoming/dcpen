@@ -25,12 +25,12 @@
     "build:lib": "vite build --config vite.lib.config.ts"
   },
   "peerDependencies": {
-    "react": ">=19.0.0",
-    "three": ">=0.176.0",
-    "@react-three/fiber": ">=9.0.0",
     "@react-three/drei": ">=10.0.0",
+    "@react-three/fiber": ">=9.0.0",
     "@react-three/rapier": ">=2.0.0",
-    "@xrift/world-components": "*"
+    "@xrift/world-components": "*",
+    "react": ">=19.0.0",
+    "three": ">=0.176.0"
   },
   "devDependencies": {
     "@originjs/vite-plugin-federation": "^1.4.1",
@@ -44,6 +44,7 @@
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "^5.1.4",
     "baseline-browser-mapping": "^2.10.0",
+    "iwer": "^2.3.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "three": "^0.183.1",
@@ -55,7 +56,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@xrift/world-components": "^0.41.0"
+    "@xrift/world-components": "*"
   },
   "license": "MIT",
   "author": "toming (https://toming.app)",

@@ -193,6 +193,7 @@ const _mHead = new Matrix4()
 const _mGrip = new Matrix4()
 const _mRig = new Matrix4()
 const _mOut = new Matrix4()
+const _mScale = new Vector3()
 const _handP = new Vector3()
 const _handQ = new Quaternion()
 const _invQ = new Quaternion()
@@ -207,7 +208,11 @@ const HANG_Q = new Quaternion().setFromEuler(new Euler(-Math.PI / 2, 0, 0))
  * ローカルVRの手のgrip姿勢をWebXRのXRFrameから直接取る。
  * 同期データ(vrTracking)のアバター相対→ワールド推定変換は本番で当てにならない
  * （実測: ペンがあらぬ座標へ飛ぶ）ため、自分の手はレンダラの一次情報から求める。
- * 座標系: gripはXR参照空間 → rig = headWorld × headLocal⁻¹ で世界系へ持ち上げる
+ * 座標系: gripはXR参照空間 → rig = headWorld × headLocal⁻¹ で世界系へ持ち上げる。
+ * 注意: XRift本番はXRオリジン(カメラリグ)をアバター身長比でscaleしているため、rigに
+ * 一様スケールが混入する。setFromRotationMatrixは無スケール前提で回転が歪む
+ * （位置は正しいので気づきにくい＝実測「握った手の回転にペンの向きが正しく追従しない」）。
+ * decomposeでスケールを除いた単位quaternionを取ること。
  */
 function localXrGripWorld(gl: WebGLRenderer, hand: Hand, outPos: Vector3, outQuat: Quaternion): boolean {
   const xr = gl.xr
@@ -236,8 +241,7 @@ function localXrGripWorld(gl: WebGLRenderer, hand: Hand, outPos: Vector3, outQua
   const headWorld = xr.getCamera().matrixWorld
   _mRig.copy(headWorld).multiply(_mHead.invert())
   _mOut.copy(_mRig).multiply(_mGrip)
-  outPos.setFromMatrixPosition(_mOut)
-  outQuat.setFromRotationMatrix(_mOut)
+  _mOut.decompose(outPos, outQuat, _mScale)
   return true
 }
 
@@ -1123,7 +1127,7 @@ const PenSlot = ({
 
       {/* 手元の実体はワールド座標なのでシーン直下に描く */}
       {createPortal(
-        <group ref={heldRef} visible={false}>
+        <group ref={heldRef} visible={false} name={`${SYNC_ID}-held-${index}`}>
           {kind === 'pen' ? <PencilMesh color={color} /> : <EraserMesh color={color} />}
           {/* 消しゴムモード時にペン先が球になる（QvPen準拠の表示） */}
           {kind === 'pen' && (

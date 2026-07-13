@@ -12,7 +12,8 @@ export default defineConfig({
     allowedHosts: true,
   },
   plugins: [
-    basicSsl(),
+    // DCPEN_HTTP=1 でhttpsを外す（ヘッドレス自動テスト用。localhostのhttpはsecure contextなのでWebXR可）
+    ...(process.env.DCPEN_HTTP ? [] : [basicSsl()]),
     react(),
     dts({
       insertTypesEntry: true,

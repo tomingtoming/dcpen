@@ -5,8 +5,10 @@
  * アイテムを単体プレビューする。本番ビルドには含まれない。
  */
 
+import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { useThree } from '@react-three/fiber'
 import { RigidBody } from '@react-three/rapier'
 import {
   DevEnvironment,
@@ -23,14 +25,52 @@ const placementMode = new URLSearchParams(window.location.search).has('preview')
   : ('placed' as const)
 
 /**
+ * `?xr` を付けて開くとWebXRエミュレータ(iwer)を注入する自動テストモード。
+ * playwright等から `window.__xrdevice`（頭・コントローラの姿勢/ボタン操作）と
+ * `window.__gl`/`window.__scene` を使ってVR動作（掴む/回す/描く）を検証できる。
+ * 本番ビルドの読み込みには乗らない（動的import＝?xr時のみ取得）。
+ */
+const xrTest = new URLSearchParams(window.location.search).has('xr')
+if (xrTest) {
+  const { XRDevice, metaQuest3 } = await import('iwer')
+  const xrdevice = new XRDevice(metaQuest3)
+  // ブラウザ素のnavigator.xrがあると既定では遠慮するので、上書きを強制する
+  xrdevice.installRuntime({ forceInstall: true })
+  ;(window as unknown as Record<string, unknown>).__xrdevice = xrdevice
+}
+
+/** XRテスト用: R3F内部（renderer/scene/camera）を窓へ晒す */
+const XrTestProbe = () => {
+  const gl = useThree((s) => s.gl)
+  const scene = useThree((s) => s.scene)
+  const camera = useThree((s) => s.camera)
+  useEffect(() => {
+    const w = window as unknown as Record<string, unknown>
+    w.__gl = gl
+    w.__scene = scene
+    w.__camera = camera
+  }, [gl, scene, camera])
+  return null
+}
+
+/**
  * XRiftProvider は UsersProvider を内包していて、素で被せると
  * DevEnvironment が注入した movement 実装を空実装で影に隠してしまう。
  * ここで useUsers() の値を吸い上げて渡し直すことで両立させる。
  */
 const XRiftDevBridge = ({ children }: { children: ReactNode }) => {
   const users = useUsers()
+  // XRテストモード: 本番ホストは VR中 getLocalMovement().isInVR を立てるが、
+  // DevEnvironment の movement 実装は isInVR を持たないため、ここで補う
+  const impl = useMemo(() => {
+    if (!xrTest) return users
+    return {
+      ...users,
+      getLocalMovement: () => ({ ...users.getLocalMovement(), isInVR: true }),
+    }
+  }, [users])
   return (
-    <XRiftProvider baseUrl="/" usersImplementation={users}>
+    <XRiftProvider baseUrl="/" usersImplementation={impl}>
       {children}
     </XRiftProvider>
   )
@@ -38,6 +78,7 @@ const XRiftDevBridge = ({ children }: { children: ReactNode }) => {
 
 const App = () => (
   <DevEnvironment camera={{ position: [0, 1.3, 3.4] }} spawnPosition={[0, 1, 3.4]}>
+    {xrTest && <XrTestProbe />}
     <XRiftDevBridge>
       <ItemProvider id="dev-pen-item">
         <PlacementStateProvider mode={placementMode}>
