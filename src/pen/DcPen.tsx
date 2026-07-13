@@ -76,17 +76,21 @@ const DOUBLE_CLICK_MS = 200
 type Hand = 'left' | 'right'
 
 /** dev環境の自動テスト用フック。本番では渡されない */
-export interface RackDebugApi {
+export interface DcPenDebugApi {
   undo: () => void
   clear: () => void
   strokeCount: () => number
   strokeColors: () => string[]
 }
 
-export interface RackProps {
-  /** 同期キーの名前空間（設置ごとに一意。例: `xpen:<itemId>`） */
-  syncId: string
-  debugApi?: (api: RackDebugApi) => void
+export interface DcPenProps {
+  /** 設置位置 */
+  position?: [number, number, number]
+  /** Y回転（ラック正面は+Z） */
+  rotationY?: number
+  /** 同期キーの名前空間。1ワールド/1インスタンスに複数置くときは変えること */
+  syncId?: string
+  debugApi?: (api: DcPenDebugApi) => void
 }
 
 /** user-left イベントのペイロード形が非公開なので防御的に取り出す */
@@ -240,7 +244,7 @@ function localXrGripWorld(gl: WebGLRenderer, hand: Hand, outPos: Vector3, outQua
 const PEN_COUNT = PEN_COLORS.length
 const SLOT_COUNT = PEN_COUNT + ERASER_COLORS.length
 
-export const PenRack = ({ syncId, debugApi }: RackProps) => {
+export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', debugApi }: DcPenProps) => {
   const SYNC_ID = syncId
   const scene = useThree((s) => s.scene)
   const gl = useThree((s) => s.gl)
@@ -473,7 +477,7 @@ export const PenRack = ({ syncId, debugApi }: RackProps) => {
   const eraserX = (i: number) => penX(PEN_COUNT - 1) + 0.32 + i * 0.13
 
   return (
-    <group>
+    <group position={position} rotation={[0, rotationY, 0]}>
       {/* 手元灯（暗いワールドでも見つけられるように） */}
       <pointLight position={[0, 1.9, 0.3]} intensity={1.6} distance={5} color="#ffd49a" />
 

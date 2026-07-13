@@ -1,6 +1,6 @@
 import { useItem, usePlacementState } from '@xrift/world-components'
-import { PenRack } from './pen/Rack'
-import type { RackDebugApi } from './pen/Rack'
+import { DcPen } from './pen/DcPen'
+import type { DcPenDebugApi } from './pen/DcPen'
 import { PEN_COLORS, RAINBOW } from './pen/types'
 
 /**
@@ -8,7 +8,7 @@ import { PEN_COLORS, RAINBOW } from './pen/types'
  * 本体実装は pen/Rack.tsx（ワールド埋め込み版「航海日誌」v18からの移植）。
  */
 
-export type PenDebugApi = RackDebugApi
+export type PenDebugApi = DcPenDebugApi
 
 export interface ItemProps {
   position?: [number, number, number]
@@ -29,7 +29,7 @@ const PlacedRack = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) =>
   const { id } = useItem()
   return (
     <group position={position} scale={scale}>
-      <PenRack syncId={`xpen:${id}`} debugApi={debugApi} />
+      <DcPen syncId={`xpen:${id}`} debugApi={debugApi} />
     </group>
   )
 }

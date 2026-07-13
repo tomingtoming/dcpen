@@ -1,33 +1,36 @@
 {
-  "name": "@xrift/xrift-pen",
+  "name": "dcpen",
   "version": "0.1.0",
-  "description": "XRift item template for creating 3D items with React Three Fiber",
+  "description": "QvPen-style spatial drawing pen for XRift worlds & items — 空間らくがきペン",
   "type": "module",
-  "main": "./dist/remoteEntry.js",
-  "module": "./dist/remoteEntry.js",
-  "types": "./dist/index.d.ts",
+  "main": "./lib/index.js",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/remoteEntry.js",
-      "types": "./dist/index.d.ts"
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
     }
   },
   "files": [
-    "dist"
+    "lib",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:lib": "vite build --config vite.lib.config.ts"
   },
   "peerDependencies": {
-    "@react-three/drei": "^10.7.3",
-    "@react-three/fiber": "^9.3.0",
-    "@react-three/rapier": "^2.1.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "three": "^0.183.1"
+    "react": ">=19.0.0",
+    "three": ">=0.176.0",
+    "@react-three/fiber": ">=9.0.0",
+    "@react-three/drei": ">=10.0.0",
+    "@react-three/rapier": ">=2.0.0",
+    "@xrift/world-components": "*"
   },
   "devDependencies": {
     "@originjs/vite-plugin-federation": "^1.4.1",
@@ -53,5 +56,22 @@
   },
   "dependencies": {
     "@xrift/world-components": "^0.41.0"
-  }
+  },
+  "license": "MIT",
+  "author": "toming (https://toming.app)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomingtoming/dcpen.git"
+  },
+  "keywords": [
+    "xrift",
+    "qvpen",
+    "pen",
+    "drawing",
+    "vr",
+    "webxr",
+    "react-three-fiber",
+    "metaverse"
+  ],
+  "sideEffects": false
 }

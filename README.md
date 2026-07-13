@@ -1,46 +1,69 @@
-# XRift Item Template
+# DcPen ✏️
 
-React Three Fiber で 3D アイテムを作成するための XRift アイテムテンプレートです。
+**[XRift](https://xrift.net/) 用の空間らくがきペン** — VRChat の [QvPen](https://booth.pm/ja/items/1555789) の操作体系を、XRift のワールドとアイテムの両方に持ち込んだものです。
 
-## セットアップ
+*A QvPen-style spatial drawing pen for XRift worlds & items.*
+
+![DcPen](public/thumbnail.png)
+
+## できること
+
+- 鉛筆型の **14色＋虹ペン** が空中のラックに並ぶ（虹ペンの線は虹色グラデーション）
+- **VR**: 左右どちらの手でもグリップ（握る）で掴む。**両手に1本ずつ持てる**。掴んだ瞬間の持ち方のまま手に追従（縦持ち・横持ち自由）。グリップを離すと**その場の空中に浮いて留まる**
+- 持ち手のトリガーで描く。**トリガー2連打（0.2秒）で消しゴムモード**＝ペン先が球になり、触れた部分だけ削れる**部分消し**（線は残りに分割。本家に無い拡張）
+- **消しゴム×3**: 掴んでトリガーで線に当てると、その線が1本消える（本家準拠）
+- ペンごとの **Respawn / Clear（色別消し）** ボタン、左パネルに **Undo / Clear All / All Reset**
+- 線・持ち主・浮遊位置はインスタンス内で**全員に同期**。late joiner にも復元
+- **デスクトップ**: クリックで持つ／戻す・左ボタン長押しで描く
+- 描いた線はインスタンスが生きている限り残る＝**書き置き**ができる
+
+## ワールドに置く
+
+```bash
+npm install dcpen
+```
+
+```tsx
+import { DcPen } from 'dcpen'
+
+export const World = () => (
+  <>
+    {/* 任意の位置・向きに置ける。複数置くなら syncId を変える */}
+    <DcPen position={[0, 0, -3]} rotationY={Math.PI / 4} />
+  </>
+)
+```
+
+| prop | 既定 | 説明 |
+| --- | --- | --- |
+| `position` | `[0, 0, 0]` | 設置位置（ラックの足元） |
+| `rotationY` | `0` | Y回転。ラック正面は +Z |
+| `syncId` | `'dcpen'` | 同期キーの名前空間。複数設置時は一意にする |
+
+依存（`react` / `three` / `@react-three/fiber` / `@react-three/drei` / `@react-three/rapier` / `@xrift/world-components`）はすべて peerDependencies です。XRift ワールドプロジェクトなら追加インストールは不要です。
+
+## アイテム版
+
+このリポジトリは XRift アイテムとしてもビルドされます（`npm run build` → `xrift upload item`）。アイテム版はインベントリからどのワールドにも設置できます。
+
+## 名前の由来
+
+特にありません。
+
+## クレジット
+
+- 操作体系は [QvPen](https://github.com/ureishi/QvPen)（ureishi さん）へのリスペクト実装です。コードは React Three Fiber でゼロから書いており、本家（UdonSharp）からの流用はありません
+- 参考: [HQ・LQ切り替えスイッチ付ミラー](https://booth.pm/ja/items/3640350) ほか VRChat のワールドギミック文化
+
+## 開発
 
 ```bash
 npm install
-npm run dev
+npm run dev        # devプレビュー (https, ?preview で設置プレビュー確認)
+npm run build      # XRiftアイテムのビルド (Module Federation)
+npm run build:lib  # npmライブラリのビルド (lib/)
 ```
 
-## ビルド
+## License
 
-```bash
-npm run build
-```
-
-## Shared 依存関係
-
-このテンプレートは [Module Federation](https://module-federation.io/) を使用しており、以下の依存関係はホストアプリケーション（xrift-frontend）と共有されます。アイテムのバンドルにはインライン化されず、shared チャンクとして分離されます。
-
-| パッケージ | バージョン |
-| --- | --- |
-| `react` | ^19.0.0 |
-| `react-dom` | ^19.0.0 |
-| `react/jsx-runtime` | - |
-| `three` | ^0.183.1 |
-| `three/addons` | ^0.183.1 |
-| `@react-three/fiber` | ^9.3.0 |
-| `@react-three/rapier` | ^2.1.0 |
-| `@react-three/drei` | ^10.7.3 |
-| `@react-three/uikit` | ^1.0.0 |
-| `@pmndrs/uikit` | ^1.0.0 |
-| `@xrift/world-components` | ^0.41.0 |
-
-### `three/addons` について
-
-`three/addons` は shared 依存として利用可能です。`DRACOLoader` や `GLTFLoader` など Three.js のアドオンモジュールを使用する場合は、`three/addons/*` からインポートしてください。
-
-```tsx
-// OK: shared チャンクとして分離される
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-```
-
-これにより、アドオンモジュールがアイテムチャンクにインライン化されることを防ぎます。インライン化された場合、`@xrift/code-security` によって `new Worker()` などが critical 違反として検出される問題が発生します。
+[MIT](LICENSE)
