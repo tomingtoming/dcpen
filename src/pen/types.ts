@@ -35,17 +35,26 @@ export const SEG_BATCH_POINTS = 4
 /** デスクトップモードの描画距離（カメラ前方・メートル） */
 export const DESKTOP_DRAW_DISTANCE = 1.2
 
+/** 虹ペンの色識別子（線を虹色グラデーションで描く） */
+export const RAINBOW = 'rainbow'
+
+/** QvPen準拠の15本（14色＋虹） */
 export const PEN_COLORS: readonly string[] = [
+  '#111111',
+  '#e53935',
+  '#fb8c00',
+  '#fdd835',
+  '#9ccc65',
+  '#43a047',
+  '#26a69a',
+  '#26c6da',
+  '#42a5f5',
+  '#1f4fd8',
+  '#8e24aa',
+  '#d500f9',
+  '#f06292',
   '#ffffff',
-  '#ff4d4d',
-  '#ff9f1c',
-  '#ffe066',
-  '#7cff6b',
-  '#4dd2ff',
-  '#4d6bff',
-  '#c44dff',
-  '#ff66c4',
-  '#333333',
+  RAINBOW,
 ]
 
 /** 座標をmm精度に丸める（同期ペイロード削減） */
