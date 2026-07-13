@@ -154,6 +154,8 @@ const PenLive = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) => {
   const pressAnchor = useRef(new Vector3())
   const pressAnchorValid = useRef(false)
   const heldPenRef = useRef<Group>(null)
+  // holder自己修復の監視: 持ち主のmovementが取れなくなった時刻
+  const holderLostAt = useRef<number | null>(null)
 
   // late join: instance stateに残っている完成ストロークを取り込む
   useEffect(() => {
@@ -319,13 +321,14 @@ const PenLive = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) => {
   }, [gl, doUndo])
 
   // ---- 毎フレーム: ペン先計算・点打ち・ペン表示姿勢 ----
-  useFrame(({ camera }) => {
+  useFrame(({ camera, clock }) => {
     const pen = heldPenRef.current
     const h = holderRef.current
 
     if (h === null) {
       if (pen) pen.visible = false
       if (activeRef.current) endActiveStroke()
+      holderLostAt.current = null
       return
     }
 
@@ -355,6 +358,7 @@ const PenLive = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) => {
     } else {
       const mv = getMovement(h)
       if (mv) {
+        holderLostAt.current = null
         if (mv.isInVR && mv.vrTracking) {
           hasPose = handToWorld(mv, 'right', tip.current)
           _penPos.copy(tip.current)
@@ -364,6 +368,16 @@ const PenLive = ({ position = [0, 0, 0], scale = 1, debugApi }: ItemProps) => {
           desktopHandApprox(mv, eye, tip.current)
           _penPos.copy(tip.current)
           hasPose = true
+        }
+      } else {
+        // 持ち主の姿が取れない＝退出後にholderが解放されず取り残された疑い。
+        // user-leftのペイロード形に依存しない自己修復: 5秒続いたらスタンドへ戻す
+        const now = clock.elapsedTime
+        if (holderLostAt.current === null) {
+          holderLostAt.current = now
+        } else if (now - holderLostAt.current > 5) {
+          holderLostAt.current = null
+          setHolder(null)
         }
       }
     }
