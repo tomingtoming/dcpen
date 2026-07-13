@@ -20,11 +20,11 @@
 ## ワールドに置く
 
 ```bash
-npm install dcpen
+npm install xrift-dcpen
 ```
 
 ```tsx
-import { DcPen } from 'dcpen'
+import { DcPen } from 'xrift-dcpen'
 
 export const World = () => (
   <>

@@ -2,7 +2,7 @@
  * dcpen — QvPen風の空間らくがきペン（XRiftワールド部品）
  *
  * ワールド作者向けエントリ。XRiftワールドの任意の場所に:
- *   import { DcPen } from 'dcpen'
+ *   import { DcPen } from 'xrift-dcpen'
  *   <DcPen position={[0, 0, -3]} rotationY={Math.PI / 4} />
  */
 export { DcPen } from './pen/DcPen'

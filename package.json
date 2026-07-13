@@ -1,5 +1,5 @@
 {
-  "name": "dcpen",
+  "name": "xrift-dcpen",
   "version": "0.1.0",
   "description": "QvPen-style spatial drawing pen for XRift worlds & items — 空間らくがきペン",
   "type": "module",
