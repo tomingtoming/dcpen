@@ -30,8 +30,10 @@ const placementMode = new URLSearchParams(window.location.search).has('preview')
  * `window.__gl`/`window.__scene` を使ってVR動作（掴む/回す/描く）を検証できる。
  * 本番ビルドの読み込みには乗らない（動的import＝?xr時のみ取得）。
  */
-const xrTest = new URLSearchParams(window.location.search).has('xr')
+const xrTest = import.meta.env.DEV && new URLSearchParams(window.location.search).has('xr')
 if (xrTest) {
+  // import.meta.env.DEV ガードで本番ビルドからは完全に消える
+  // （iwerはstorageを触るためXRiftのセキュリティ検査に掛かる。devサーバ専用）
   const { XRDevice, metaQuest3 } = await import('iwer')
   const xrdevice = new XRDevice(metaQuest3)
   // ブラウザ素のnavigator.xrがあると既定では遠慮するので、上書きを強制する
