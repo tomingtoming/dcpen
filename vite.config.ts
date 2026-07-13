@@ -23,64 +23,56 @@ export default defineConfig({
       exposes: {
         './Item': './src/index.tsx',
       },
+      // requiredVersion はすべて '*'（spinwardワールドの動作実績に合わせる）。
+      // 本番ホストの共有スコープは three@0.176.0・@xrift/world-components@0.1.0(内部版番号) を提供しており、
+      // テンプレ既定の '^0.183.1' / '^0.41.0' だと不満足→ローカルフォールバックへ落ちるが、
+      // __federation_shared_*.js はアップロード時に既定ignoreで除外されるため404→ロード失敗する。
       shared: {
         react: {
           singleton: true,
-          requiredVersion: '^19.0.0',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         'react-dom': {
           singleton: true,
-          requiredVersion: '^19.0.0',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         'react-dom/client': {
           singleton: true,
-          strictVersion: false,
         },
         'react/jsx-runtime': {
           singleton: true,
-          requiredVersion: '^19.0.0',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         three: {
           singleton: true,
-          requiredVersion: '^0.183.1',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         'three/addons/loaders/DRACOLoader.js': {
           singleton: true,
-          version: '0.0.0',
         },
         '@react-three/fiber': {
           singleton: true,
-          requiredVersion: '^9.3.0',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         '@react-three/rapier': {
           singleton: true,
-          requiredVersion: '^2.1.0',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         '@react-three/drei': {
           singleton: true,
-          requiredVersion: '^10.7.3',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         '@react-three/uikit': {
           singleton: true,
-          requiredVersion: '^1.0.0',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         '@pmndrs/uikit': {
           singleton: true,
-          requiredVersion: '^1.0.0',
-          strictVersion: false,
+          requiredVersion: '*',
         },
         '@xrift/world-components': {
           singleton: true,
-          requiredVersion: '^0.41.0',
-          strictVersion: false,
+          requiredVersion: '*',
         },
       },
     }),
