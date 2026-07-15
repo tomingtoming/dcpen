@@ -3,13 +3,14 @@ import type { MutableRefObject, ReactNode } from 'react'
 import { createPortal, useFrame, useThree } from '@react-three/fiber'
 import { Line, Text } from '@react-three/drei'
 import { CatmullRomCurve3, Color, Euler, Group, Matrix4, Mesh, Quaternion, Vector3 } from 'three'
-import type { WebGLRenderer } from 'three'
 import {
   Interactable,
   useInstanceEvent,
   useInstanceState,
   useUsers,
 } from '@xrift/world-components'
+import { XRGrabProvider, useGrabbable } from 'xrift-grab'
+import type { Hand } from 'xrift-grab'
 import { desktopHandApprox, handToWorld, handWorldQuaternion } from './math'
 import { StrokeStore } from './store'
 import {
@@ -73,8 +74,6 @@ const ERASE_RADIUS = 0.07
 const PARTIAL_ERASE_RADIUS = 0.04
 /** トリガー/クリックのダブルクリック判定（QvPen: clickTimeInterval = 0.2s） */
 const DOUBLE_CLICK_MS = 200
-
-type Hand = 'left' | 'right'
 
 /** dev環境の自動テスト用フック。本番では渡されない */
 export interface DcPenDebugApi {
@@ -203,25 +202,8 @@ interface PenPose {
 /** ラック全体で共有する描画入力の状態（手ごと。子スロットは持ち手の分だけ読む） */
 type DrawInput = Record<Hand, { down: boolean; seq: number }>
 
-interface HandHold {
-  slot: number
-  /** グリップで掴んだ（＝グリップを離すとその場に置く）か */
-  viaGrip: boolean
-}
-
-/** 自分の両手の持ち物（片手1本＝両手で2本まで） */
-type MyHolds = Record<Hand, HandHold | null>
 /** 消しゴムモードは手ごとに独立（両手持ち時に片方だけ消しゴムにできる） */
 type EraserModes = Record<Hand, boolean>
-
-/** 親がスロットを横断操作するためのAPI（近接掴み・片づけ・持ち替え） */
-interface SlotApi {
-  isFree: () => boolean
-  penWorldPos: (out: Vector3) => void
-  grab: (viaGrip: boolean, hand: Hand, handPos?: Vector3, handQuat?: Quaternion) => void
-  dropHere: () => void
-  putAway: () => void
-}
 
 // ---- 使い回しの一時オブジェクト ----
 const _tipQ = new Quaternion()
@@ -230,61 +212,9 @@ const _camPos = new Vector3()
 const _penPos = new Vector3()
 const _viewOffset = new Vector3()
 const _lookM = new Matrix4()
-const _mHead = new Matrix4()
-const _mGrip = new Matrix4()
-const _mRig = new Matrix4()
-const _mOut = new Matrix4()
-const _mScale = new Vector3()
-const _handP = new Vector3()
-const _handQ = new Quaternion()
-const _invQ = new Quaternion()
-const _grabPos = new Vector3()
-const _grabQ = new Quaternion()
-const _slotPos = new Vector3()
 const _erasePt = new Vector3()
 /** ラックに吊られた鉛筆の姿勢（ペン先下向き） */
 const HANG_Q = new Quaternion().setFromEuler(new Euler(-Math.PI / 2, 0, 0))
-
-/**
- * ローカルVRの手のgrip姿勢をWebXRのXRFrameから直接取る。
- * 同期データ(vrTracking)のアバター相対→ワールド推定変換は本番で当てにならない
- * （実測: ペンがあらぬ座標へ飛ぶ）ため、自分の手はレンダラの一次情報から求める。
- * 座標系: gripはXR参照空間 → rig = headWorld × headLocal⁻¹ で世界系へ持ち上げる。
- * 注意: XRift本番はXRオリジン(カメラリグ)をアバター身長比でscaleしているため、rigに
- * 一様スケールが混入する。setFromRotationMatrixは無スケール前提で回転が歪む
- * （位置は正しいので気づきにくい＝実測「握った手の回転にペンの向きが正しく追従しない」）。
- * decomposeでスケールを除いた単位quaternionを取ること。
- */
-function localXrGripWorld(gl: WebGLRenderer, hand: Hand, outPos: Vector3, outQuat: Quaternion): boolean {
-  const xr = gl.xr
-  if (!xr.isPresenting) return false
-  const session = xr.getSession()
-  if (!session) return false
-  const frame = xr.getFrame()
-  const refSpace = xr.getReferenceSpace()
-  if (!frame || !refSpace) return false
-  const viewerPose = frame.getViewerPose(refSpace)
-  if (!viewerPose) return false
-  let src: XRInputSource | null = null
-  for (const s of session.inputSources) {
-    if (s.handedness === hand && (s.gripSpace || s.targetRaySpace)) {
-      src = s
-      break
-    }
-  }
-  if (!src) return false
-  const space = src.gripSpace ?? src.targetRaySpace
-  const pose = frame.getPose(space, refSpace)
-  if (!pose) return false
-  _mHead.fromArray(Array.from(viewerPose.transform.matrix))
-  _mGrip.fromArray(Array.from(pose.transform.matrix))
-  // three側のXRカメラのmatrixWorldは頭のワールド姿勢（rig合成済み）
-  const headWorld = xr.getCamera().matrixWorld
-  _mRig.copy(headWorld).multiply(_mHead.invert())
-  _mOut.copy(_mRig).multiply(_mGrip)
-  _mOut.decompose(outPos, outQuat, _mScale)
-  return true
-}
 
 const PEN_COUNT = PEN_COLORS.length
 const SLOT_COUNT = PEN_COUNT + ERASER_COLORS.length
@@ -393,18 +323,18 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
     left: { down: false, seq: 0 },
     right: { down: false, seq: 0 },
   })
-  const myHold = useRef<MyHolds>({ left: null, right: null })
   /** QvPen準拠: 持ち手トリガーのダブルクリック(0.2s)で消しゴムモード切替（手ごと） */
   const eraserMode = useRef<EraserModes>({ left: false, right: false })
   const lastPressAt = useRef<Record<Hand, number>>({ left: 0, right: 0 })
-  /** グリップ掴みの要求。手の姿勢が要るので実処理は次フレーム（XRFrame内） */
-  const pendingGrabHand = useRef<Hand | null>(null)
-  const slotApi = useRef<(SlotApi | null)[]>(new Array(SLOT_COUNT).fill(null))
+  /** その手が今何かを持っているか（xrift-grabのuseGrabbableのonGrabStart/onDropから更新） */
+  const anyHeldByHand = useRef<Record<Hand, boolean>>({ left: false, right: false })
+  /** 「ぜんぶ片づける」用のputAwayだけを集めた軽量レジストリ（グリップ掴み自体はxrift-grab側が持つ） */
+  const putAwayFns = useRef<((() => void) | null)[]>(new Array(SLOT_COUNT).fill(null))
 
   useEffect(() => {
     const press = (hand: Hand) => {
       const now = performance.now()
-      if (myHold.current[hand] !== null && now - lastPressAt.current[hand] < DOUBLE_CLICK_MS) {
+      if (anyHeldByHand.current[hand] && now - lastPressAt.current[hand] < DOUBLE_CLICK_MS) {
         eraserMode.current[hand] = !eraserMode.current[hand]
       }
       lastPressAt.current[hand] = now
@@ -436,26 +366,6 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
       const h = handOf(e)
       if (h) release(h)
     }
-    // QvPen準拠: グリップ(握る)で掴む・離すとその場に置く（左右どちらでも・片手1本）
-    const onSqueezeStart = (e: XRInputSourceEvent) => {
-      const h = handOf(e)
-      if (!h) return
-      const held = myHold.current[h]
-      if (held === null) {
-        pendingGrabHand.current = h
-      } else {
-        // レイ取り(sticky)のペンを握り直したらグリップ持ちに昇格＝離すと置けるように
-        held.viaGrip = true
-      }
-    }
-    const onSqueezeEnd = (e: XRInputSourceEvent) => {
-      const h = handOf(e)
-      if (!h) return
-      const held = myHold.current[h]
-      if (held !== null && held.viaGrip) {
-        slotApi.current[held.slot]?.dropHere()
-      }
-    }
 
     let boundSession: XRSession | null = null
     const bindSession = () => {
@@ -464,15 +374,11 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
       boundSession = session
       session.addEventListener('selectstart', onSelectStart)
       session.addEventListener('selectend', onSelectEnd)
-      session.addEventListener('squeezestart', onSqueezeStart)
-      session.addEventListener('squeezeend', onSqueezeEnd)
     }
     const unbindSession = () => {
       if (!boundSession) return
       boundSession.removeEventListener('selectstart', onSelectStart)
       boundSession.removeEventListener('selectend', onSelectEnd)
-      boundSession.removeEventListener('squeezestart', onSqueezeStart)
-      boundSession.removeEventListener('squeezeend', onSqueezeEnd)
       boundSession = null
       drawInput.current.left.down = false
       drawInput.current.right.down = false
@@ -490,30 +396,8 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
     }
   }, [gl])
 
-  // グリップ掴み: squeezestartの次のフレームで手の位置を取り、届く範囲の空きスロットを掴む
-  useFrame(() => {
-    const hand = pendingGrabHand.current
-    if (hand === null) return
-    pendingGrabHand.current = null
-    if (myHold.current[hand] !== null) return
-    if (!localXrGripWorld(gl, hand, _grabPos, _grabQ)) return
-    let best = -1
-    let bestD = GRAB_RADIUS
-    for (let i = 0; i < slotApi.current.length; i++) {
-      const api = slotApi.current[i]
-      if (!api || !api.isFree()) continue
-      api.penWorldPos(_slotPos)
-      const d = _slotPos.distanceTo(_grabPos)
-      if (d < bestD) {
-        bestD = d
-        best = i
-      }
-    }
-    if (best >= 0) slotApi.current[best]?.grab(true, hand, _grabPos, _grabQ)
-  })
-
   const putAwayAll = useCallback(() => {
-    for (const api of slotApi.current) api?.putAway()
+    for (const fn of putAwayFns.current) fn?.()
   }, [])
 
   // ---- レイアウト（QvPenのラック風・机なし空中固定） ----
@@ -524,120 +408,122 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
 
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
-      {/* 手元灯（暗いワールドでも見つけられるように） */}
-      <pointLight position={[0, 1.9, 0.3]} intensity={1.6} distance={5} color="#ffd49a" />
+      <XRGrabProvider grabRadius={GRAB_RADIUS}>
+        {/* 手元灯（暗いワールドでも見つけられるように） */}
+        <pointLight position={[0, 1.9, 0.3]} intensity={1.6} distance={5} color="#ffd49a" />
 
-      {/* 色別ペン（吊り下げ・ペン先下向き） */}
-      {PEN_COLORS.map((c, i) => (
-        <PenSlot
-          key={c}
-          index={i}
-          kind="pen"
-          color={c}
-          colorName={COLOR_NAMES[i] ?? c}
-          slotOffset={[penX(i), 1.05, 0]}
-          syncId={SYNC_ID}
-          store={store}
-          emitSeg={emitSeg}
-          emitEnd={emitEnd}
-          persistFinished={persistFinished}
-          bump={bump}
-          drawInput={drawInput}
-          myHold={myHold}
-          pushUndoSid={pushUndoSid}
-          eraserMode={eraserMode}
-          eraseStroke={eraseStroke}
-          slotApi={slotApi}
-        />
-      ))}
-
-      {/* 消しゴム（QvPen準拠: 掴んでトリガーで線に触れて消す＝線1本単位） */}
-      {ERASER_COLORS.map((c, i) => (
-        <PenSlot
-          key={c}
-          index={PEN_COUNT + i}
-          kind="eraser"
-          color={c}
-          colorName="消しゴム"
-          slotOffset={[eraserX(i), 1.15, 0]}
-          syncId={SYNC_ID}
-          store={store}
-          emitSeg={emitSeg}
-          emitEnd={emitEnd}
-          persistFinished={persistFinished}
-          bump={bump}
-          drawInput={drawInput}
-          myHold={myHold}
-          pushUndoSid={pushUndoSid}
-          eraserMode={eraserMode}
-          eraseStroke={eraseStroke}
-          slotApi={slotApi}
-        />
-      ))}
-
-      {/* ペンごとのRespawn（上）とClear（下）＝QvPenのラックUI */}
-      {PEN_COLORS.map((c, i) => (
-        <group key={`ui-${c}`}>
-          <LabeledButton
-            id={`${SYNC_ID}-respawn-${i}`}
-            position={[penX(i), 1.62, 0]}
-            size={[0.09, 0.07, 0.02]}
-            color="#37474f"
-            label="Respawn"
-            fontSize={0.015}
-            interactionText={`${COLOR_NAMES[i]}のペンを片づける`}
-            onInteract={() => slotApi.current[i]?.putAway()}
-          >
-            {/* 色バー（どのペンのボタンかを示す・QvPenの色帯） */}
-            <mesh position={[0, -0.05, 0]}>
-              <boxGeometry args={[0.1, 0.016, 0.02]} />
-              <meshStandardMaterial
-                color={c === RAINBOW ? '#ffffff' : c}
-                emissive={c === RAINBOW ? '#ffffff' : c}
-                emissiveIntensity={0.5}
-              />
-            </mesh>
-          </LabeledButton>
-          <LabeledButton
-            id={`${SYNC_ID}-clearcolor-${i}`}
-            position={[penX(i), 0.62, 0]}
-            size={[0.09, 0.07, 0.02]}
-            color="#4a3b57"
-            label="Clear"
-            fontSize={0.017}
-            interactionText={`${COLOR_NAMES[i]}の線をぜんぶ消す`}
-            onInteract={() => clearColor(c)}
+        {/* 色別ペン（吊り下げ・ペン先下向き） */}
+        {PEN_COLORS.map((c, i) => (
+          <PenSlot
+            key={c}
+            index={i}
+            kind="pen"
+            color={c}
+            colorName={COLOR_NAMES[i] ?? c}
+            slotOffset={[penX(i), 1.05, 0]}
+            syncId={SYNC_ID}
+            store={store}
+            emitSeg={emitSeg}
+            emitEnd={emitEnd}
+            persistFinished={persistFinished}
+            bump={bump}
+            drawInput={drawInput}
+            anyHeldByHand={anyHeldByHand}
+            pushUndoSid={pushUndoSid}
+            eraserMode={eraserMode}
+            eraseStroke={eraseStroke}
+            putAwayFns={putAwayFns}
           />
-        </group>
-      ))}
+        ))}
 
-      {/* 左パネル（QvPenの管理UI相当・ラベル常時表示） */}
-      <LabeledButton
-        id={`${SYNC_ID}-undo`}
-        position={[penX(0) - 0.35, 1.45, 0]}
-        color="#8a6d00"
-        label="Undo"
-        interactionText="1本戻す（自分の線）"
-        onInteract={doUndo}
-      />
-      <LabeledButton
-        id={`${SYNC_ID}-clear`}
-        position={[penX(0) - 0.35, 1.2, 0]}
-        color="#8a0015"
-        label="Clear All"
-        fontSize={0.019}
-        interactionText="線をぜんぶ消す"
-        onInteract={clearAll}
-      />
-      <LabeledButton
-        id={`${SYNC_ID}-reset`}
-        position={[penX(0) - 0.35, 0.95, 0]}
-        color="#1d4f9e"
-        label="All Reset"
-        fontSize={0.019}
-        interactionText="ペンと消しゴムをぜんぶ片づける"
-        onInteract={putAwayAll}
-      />
+        {/* 消しゴム（QvPen準拠: 掴んでトリガーで線に触れて消す＝線1本単位） */}
+        {ERASER_COLORS.map((c, i) => (
+          <PenSlot
+            key={c}
+            index={PEN_COUNT + i}
+            kind="eraser"
+            color={c}
+            colorName="消しゴム"
+            slotOffset={[eraserX(i), 1.15, 0]}
+            syncId={SYNC_ID}
+            store={store}
+            emitSeg={emitSeg}
+            emitEnd={emitEnd}
+            persistFinished={persistFinished}
+            bump={bump}
+            drawInput={drawInput}
+            anyHeldByHand={anyHeldByHand}
+            pushUndoSid={pushUndoSid}
+            eraserMode={eraserMode}
+            eraseStroke={eraseStroke}
+            putAwayFns={putAwayFns}
+          />
+        ))}
+
+        {/* ペンごとのRespawn（上）とClear（下）＝QvPenのラックUI */}
+        {PEN_COLORS.map((c, i) => (
+          <group key={`ui-${c}`}>
+            <LabeledButton
+              id={`${SYNC_ID}-respawn-${i}`}
+              position={[penX(i), 1.62, 0]}
+              size={[0.09, 0.07, 0.02]}
+              color="#37474f"
+              label="Respawn"
+              fontSize={0.015}
+              interactionText={`${COLOR_NAMES[i]}のペンを片づける`}
+              onInteract={() => putAwayFns.current[i]?.()}
+            >
+              {/* 色バー（どのペンのボタンかを示す・QvPenの色帯） */}
+              <mesh position={[0, -0.05, 0]}>
+                <boxGeometry args={[0.1, 0.016, 0.02]} />
+                <meshStandardMaterial
+                  color={c === RAINBOW ? '#ffffff' : c}
+                  emissive={c === RAINBOW ? '#ffffff' : c}
+                  emissiveIntensity={0.5}
+                />
+              </mesh>
+            </LabeledButton>
+            <LabeledButton
+              id={`${SYNC_ID}-clearcolor-${i}`}
+              position={[penX(i), 0.62, 0]}
+              size={[0.09, 0.07, 0.02]}
+              color="#4a3b57"
+              label="Clear"
+              fontSize={0.017}
+              interactionText={`${COLOR_NAMES[i]}の線をぜんぶ消す`}
+              onInteract={() => clearColor(c)}
+            />
+          </group>
+        ))}
+
+        {/* 左パネル（QvPenの管理UI相当・ラベル常時表示） */}
+        <LabeledButton
+          id={`${SYNC_ID}-undo`}
+          position={[penX(0) - 0.35, 1.45, 0]}
+          color="#8a6d00"
+          label="Undo"
+          interactionText="1本戻す（自分の線）"
+          onInteract={doUndo}
+        />
+        <LabeledButton
+          id={`${SYNC_ID}-clear`}
+          position={[penX(0) - 0.35, 1.2, 0]}
+          color="#8a0015"
+          label="Clear All"
+          fontSize={0.019}
+          interactionText="線をぜんぶ消す"
+          onInteract={clearAll}
+        />
+        <LabeledButton
+          id={`${SYNC_ID}-reset`}
+          position={[penX(0) - 0.35, 0.95, 0]}
+          color="#1d4f9e"
+          label="All Reset"
+          fontSize={0.019}
+          interactionText="ペンと消しゴムをぜんぶ片づける"
+          onInteract={putAwayAll}
+        />
+      </XRGrabProvider>
 
       {/* ストロークはワールド座標なのでシーン直下に描く（描画時のみスプライン細分） */}
       {createPortal(
@@ -681,11 +567,11 @@ interface PenSlotProps {
   persistFinished: () => void
   bump: () => void
   drawInput: MutableRefObject<DrawInput>
-  myHold: MutableRefObject<MyHolds>
+  anyHeldByHand: MutableRefObject<Record<Hand, boolean>>
   pushUndoSid: (sid: string) => void
   eraserMode: MutableRefObject<EraserModes>
   eraseStroke: (sid: string) => void
-  slotApi: MutableRefObject<(SlotApi | null)[]>
+  putAwayFns: MutableRefObject<((() => void) | null)[]>
 }
 
 /** ラックの1本＝独立した持ち主を持つペン/消しゴム */
@@ -702,16 +588,15 @@ const PenSlot = ({
   persistFinished,
   bump,
   drawInput,
-  myHold,
+  anyHeldByHand,
   pushUndoSid,
   eraserMode,
   eraseStroke,
-  slotApi,
+  putAwayFns,
 }: PenSlotProps) => {
   const SYNC_ID = syncId
   const { localUser, getMovement, getLocalMovement, getAvatarHeight } = useUsers()
   const scene = useThree((s) => s.scene)
-  const gl = useThree((s) => s.gl)
 
   const myId = localUser?.id ?? 'dev-local'
   const myIdRef = useRef(myId)
@@ -744,12 +629,6 @@ const PenSlot = ({
   const pressAtTake = useRef(-1)
   /** ラック定位置の実ワールド姿勢を測る不可視アンカー（設置の位置・向きに追従） */
   const anchorRef = useRef<Group>(null)
-  /** 掴んだ瞬間の手→持ち物の相対姿勢（縦持ち横持ちの保持・VRC Pickup相当） */
-  const offP = useRef(new Vector3(0, 0, kind === 'pen' ? -0.08 : -0.03))
-  const offQ = useRef(new Quaternion())
-  /** 手放し用: 最後に表示した持ち物のワールド姿勢 */
-  const lastPenPos = useRef(new Vector3())
-  const lastPenQuat = useRef(new Quaternion())
 
   // 持ち主が去ったら定位置へ戻す（線は備品として残る＝書き置き）
   useInstanceEvent<unknown>('user-left', (d) => {
@@ -799,94 +678,88 @@ const PenSlot = ({
     [kind],
   )
 
+  /** 近接スキャン用の掴みポイント（ペン先寄りの実測位置。姿勢アンカーとは別点） */
+  const grabPointWorldPos = useCallback(
+    (out: Vector3) => {
+      const p = poseRef.current
+      const a = anchorRef.current
+      if (p) {
+        out.set(p.p[0], p.p[1], p.p[2])
+      } else if (a) {
+        a.getWorldPosition(out)
+        if (kind === 'pen') out.y += 0.17
+      } else {
+        out.set(0, 0, 0)
+      }
+    },
+    [kind],
+  )
+
   // ---- 取る/置く/片づける ----
+  /** 今このスロットを持っている自分の手（xrift-grabのonGrabStart/onDropから更新） */
+  const myHeldHandRef = useRef<Hand | null>(null)
+
   /** このスロットを持っている自分の手を外す（消しゴムモードも解除） */
   const clearMyHand = useCallback(() => {
-    for (const hd of ['left', 'right'] as Hand[]) {
-      if (myHold.current[hd]?.slot === index) {
-        myHold.current[hd] = null
-        eraserMode.current[hd] = false
-      }
-    }
-  }, [index, myHold, eraserMode])
+    const hd = myHeldHandRef.current
+    if (hd === null) return
+    myHeldHandRef.current = null
+    anyHeldByHand.current[hd] = false
+    eraserMode.current[hd] = false
+  }, [anyHeldByHand, eraserMode])
 
-  const take = useCallback(
-    (viaGrip: boolean, hand: Hand = 'right', handPos?: Vector3, handQuat?: Quaternion) => {
-      if (holderRef.current !== null) return
-      const held = myHold.current[hand]
-      if (held !== null && held.slot !== index) {
-        // 同じ手での持ち替え: いま持っている物はその場に置く（QvPen同様）。反対の手は持ったまま
-        slotApi.current[held.slot]?.dropHere()
-      }
-      // 掴んだ瞬間の相対姿勢を保存（グリップ掴みのみ。レイ取りは既定の構え）
-      if (viaGrip && handPos && handQuat) {
-        restingWorldPose(_penPos, _tipQ)
-        _invQ.copy(handQuat).invert()
-        offQ.current.copy(_invQ).multiply(_tipQ)
-        offP.current.copy(_penPos).sub(handPos).applyQuaternion(_invQ)
-      } else {
-        offP.current.set(0, 0, kind === 'pen' ? -0.08 : -0.03)
-        offQ.current.identity()
-      }
+  const grab = useGrabbable({
+    id: `${SYNC_ID}-slot-${index}`,
+    isFree: () => holderRef.current === null,
+    worldPosition: grabPointWorldPos,
+    worldPose: restingWorldPose,
+    defaultOffset: {
+      position: new Vector3(0, 0, kind === 'pen' ? -0.08 : -0.03),
+      quaternion: new Quaternion(),
+    },
+    onGrabStart: (hand) => {
       setHolder({ id: myIdRef.current, hand })
-      myHold.current[hand] = { slot: index, viaGrip }
+      myHeldHandRef.current = hand
+      anyHeldByHand.current[hand] = true
       eraserMode.current[hand] = false
       // この押下（トリガー/クリック）は取る操作。描画には使わない
       pressAtTake.current = drawInput.current[hand].down ? drawInput.current[hand].seq : -1
     },
-    [setHolder, index, myHold, drawInput, eraserMode, slotApi, restingWorldPose, kind],
-  )
+    onDrop: (pose) => {
+      endActiveStroke()
+      if (pose) {
+        setPose({
+          p: [roundMm(pose.position.x), roundMm(pose.position.y), roundMm(pose.position.z)],
+          q: [
+            Math.round(pose.quaternion.x * 1000) / 1000,
+            Math.round(pose.quaternion.y * 1000) / 1000,
+            Math.round(pose.quaternion.z * 1000) / 1000,
+            Math.round(pose.quaternion.w * 1000) / 1000,
+          ],
+        })
+      } else {
+        setPose(null)
+      }
+      setHolder(null)
+      clearMyHand()
+    },
+  })
 
   const returnToRack = useCallback(() => {
-    endActiveStroke()
-    setPose(null)
-    setHolder(null)
-    clearMyHand()
-  }, [endActiveStroke, setPose, setHolder, clearMyHand])
-
-  const dropHere = useCallback(() => {
-    endActiveStroke()
-    setPose({
-      p: [roundMm(lastPenPos.current.x), roundMm(lastPenPos.current.y), roundMm(lastPenPos.current.z)],
-      q: [
-        Math.round(lastPenQuat.current.x * 1000) / 1000,
-        Math.round(lastPenQuat.current.y * 1000) / 1000,
-        Math.round(lastPenQuat.current.z * 1000) / 1000,
-        Math.round(lastPenQuat.current.w * 1000) / 1000,
-      ],
-    })
-    setHolder(null)
-    clearMyHand()
-  }, [endActiveStroke, setPose, setHolder, clearMyHand])
+    grab.drop(null)
+  }, [grab])
 
   const putAway = useCallback(() => {
     if (holderRef.current === null) setPose(null)
   }, [setPose])
 
-  // 親へ横断操作APIを登録
+  // 親の「ぜんぶ片づける」用にputAwayだけを登録（グリップ掴み自体はxrift-grab側が持つ）
   useEffect(() => {
-    slotApi.current[index] = {
-      isFree: () => holderRef.current === null,
-      penWorldPos: (out: Vector3) => {
-        const p = poseRef.current
-        const a = anchorRef.current
-        if (p) {
-          out.set(p.p[0], p.p[1], p.p[2])
-        } else if (a) {
-          a.getWorldPosition(out)
-          if (kind === 'pen') out.y += 0.17
-        } else {
-          out.set(0, 0, 0)
-        }
-      },
-      grab: take,
-      dropHere,
-      putAway,
-    }
+    putAwayFns.current[index] = putAway
     return () => {
-      slotApi.current[index] = null
+      putAwayFns.current[index] = null
     }
-  }, [index, kind, take, dropHere, putAway, slotApi])
+  }, [index, putAway, putAwayFns])
 
   /** 消しゴム(オブジェクト)動作: 先端に触れている線を消す（本家準拠で線1本単位） */
   const erasePass = useCallback(() => {
@@ -968,35 +841,32 @@ const PenSlot = ({
     let hasPose = false
     _penPos.copy(tip.current)
     if (h.id === myIdRef.current) {
-      const mv = getLocalMovement()
-      if (mv.isInVR && localXrGripWorld(gl, h.hand, _handP, _handQ)) {
-        // 自分のVRの手はXRFrameのgrip姿勢が一次情報。
-        // 掴んだ瞬間の相対姿勢を掛けて「持った向きのまま」手に追従させる
-        _tipQ.copy(_handQ).multiply(offQ.current)
-        _penPos.copy(offP.current).applyQuaternion(_handQ).add(_handP)
+      if (grab.getAttachedPose(_penPos, _tipQ)) {
+        // 自分のVRの手はxrift-grabがXRFrameのgrip姿勢から直接求める。
+        // 掴んだ瞬間の相対姿勢が掛かった状態で返るので「持った向きのまま」手に追従する
         tip.current.copy(_penPos)
         if (held) held.quaternion.copy(_tipQ)
         hasPose = true
-      } else if (mv.isInVR && mv.vrTracking) {
-        hasPose = handToWorld(mv, h.hand, tip.current)
-        _penPos.copy(tip.current)
-        if (held && handWorldQuaternion(mv, h.hand, _tipQ)) held.quaternion.copy(_tipQ)
       } else {
-        // デスクトップ: インクは照準先、持ち物はFPSの構え
-        camera.getWorldPosition(_camPos)
-        camera.getWorldDirection(_dir)
-        tip.current.copy(_camPos).addScaledVector(_dir, DESKTOP_DRAW_DISTANCE)
-        _viewOffset.set(0.17, -0.11, -0.4).applyQuaternion(camera.quaternion)
-        _penPos.copy(_camPos).add(_viewOffset)
-        if (held) {
-          _lookM.lookAt(_penPos, tip.current, camera.up)
-          held.quaternion.setFromRotationMatrix(_lookM)
+        const mv = getLocalMovement()
+        if (mv.isInVR && mv.vrTracking) {
+          hasPose = handToWorld(mv, h.hand, tip.current)
+          _penPos.copy(tip.current)
+          if (held && handWorldQuaternion(mv, h.hand, _tipQ)) held.quaternion.copy(_tipQ)
+        } else {
+          // デスクトップ: インクは照準先、持ち物はFPSの構え
+          camera.getWorldPosition(_camPos)
+          camera.getWorldDirection(_dir)
+          tip.current.copy(_camPos).addScaledVector(_dir, DESKTOP_DRAW_DISTANCE)
+          _viewOffset.set(0.17, -0.11, -0.4).applyQuaternion(camera.quaternion)
+          _penPos.copy(_camPos).add(_viewOffset)
+          if (held) {
+            _lookM.lookAt(_penPos, tip.current, camera.up)
+            held.quaternion.setFromRotationMatrix(_lookM)
+          }
+          hasPose = true
         }
-        hasPose = true
-      }
-      if (hasPose && held) {
-        lastPenPos.current.copy(_penPos)
-        lastPenQuat.current.copy(held.quaternion)
+        if (hasPose && held) grab.reportFallbackPose(_penPos, held.quaternion)
       }
     } else {
       const mv = getMovement(h.id)
@@ -1127,12 +997,12 @@ const PenSlot = ({
       if (poseRef.current) {
         putAway()
       } else {
-        take(false)
+        grab.grabViaClick()
       }
-    } else if (h.id === myIdRef.current) {
+    } else if (grab.isHeld) {
       returnToRack()
     }
-  }, [take, returnToRack, putAway])
+  }, [grab, returnToRack, putAway])
 
   return (
     <group position={slotOffset}>
@@ -1171,7 +1041,7 @@ const PenSlot = ({
           >
             <Interactable
               id={`${SYNC_ID}-slot-air-${index}`}
-              onInteract={() => take(false)}
+              onInteract={() => grab.grabViaClick()}
               interactionText={`${noun}を持つ`}
             >
               {kind === 'pen' ? <PencilMesh color={color} /> : <EraserMesh color={color} />}
