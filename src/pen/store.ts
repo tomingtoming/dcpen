@@ -28,11 +28,11 @@ export class StrokeStore {
       .filter((s): s is Stroke => s !== undefined)
   }
 
-  /** 増分書き込み（自エコー・重複到着に冪等） */
-  applySegment(sid: string, color: string, off: number, pts: number[]): void {
+  /** 増分書き込み（自エコー・重複到着に冪等）。hueOffsetは新規ストローク作成時のみ効く */
+  applySegment(sid: string, color: string, off: number, pts: number[], hueOffset = 0): void {
     let s = this.strokes.get(sid)
     if (!s) {
-      s = { sid, color, pts: [] }
+      s = { sid, color, pts: [], hueOffset }
       this.strokes.set(sid, s)
     }
     const base = off * 3
@@ -56,7 +56,7 @@ export class StrokeStore {
     let changed = false
     for (const s of strokes) {
       if (this.strokes.has(s.sid)) continue
-      this.strokes.set(s.sid, { sid: s.sid, color: s.color, pts: [...s.pts] })
+      this.strokes.set(s.sid, { sid: s.sid, color: s.color, pts: [...s.pts], hueOffset: s.hueOffset ?? 0 })
       this.finished.add(s.sid)
       this.finishedOrder.push(s.sid)
       changed = true

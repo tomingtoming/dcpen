@@ -142,11 +142,15 @@ const _rainbowC = new Color()
  * 補間後の頂点間隔は MIN_SEGMENT/SMOOTH_DIV なので、同じ「周/m」になるよう換算する
  */
 const RAINBOW_HUE_STEP = 0.02 * (MIN_SEGMENT / 0.015 / SMOOTH_DIV)
-/** 虹ペンの線: 点列に沿って色相が巡る頂点色 */
-function rainbowVertexColors(n: number): [number, number, number][] {
+/**
+ * 虹ペンの線: 点列に沿って色相が巡る頂点色。
+ * indexOffsetは部分消しで分割されたストロークが「切られる前の続き」の色相から
+ * 始まるための位相合わせ（元のストロークの hueOffset を SMOOTH_DIV 換算した値）
+ */
+function rainbowVertexColors(n: number, indexOffset: number): [number, number, number][] {
   const out: [number, number, number][] = []
   for (let i = 0; i < n; i++) {
-    _rainbowC.setHSL((i * RAINBOW_HUE_STEP) % 1, 1, 0.6)
+    _rainbowC.setHSL(((i + indexOffset) * RAINBOW_HUE_STEP) % 1, 1, 0.6)
     out.push([_rainbowC.r, _rainbowC.g, _rainbowC.b])
   }
   return out
@@ -187,6 +191,7 @@ interface ActiveStroke {
   color: string
   count: number
   sent: number
+  hueOffset: number
 }
 
 /** 空中に置かれたペンの姿勢（instance stateで同期） */
@@ -305,7 +310,7 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
   }, [persisted, store, bump])
 
   const emitSeg = useInstanceEvent<SegEvent>(`${SYNC_ID}:seg`, (d) => {
-    store.applySegment(d.sid, d.color, d.off, d.pts)
+    store.applySegment(d.sid, d.color, d.off, d.pts, d.hueOffset)
     bump()
   })
   const emitEnd = useInstanceEvent<EndEvent>(`${SYNC_ID}:end`, (d) => {
@@ -646,7 +651,7 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
                 <Line
                   key={s.sid}
                   points={pts}
-                  vertexColors={rainbowVertexColors(pts.length)}
+                  vertexColors={rainbowVertexColors(pts.length, (s.hueOffset ?? 0) * SMOOTH_DIV)}
                   color="#ffffff"
                   lineWidth={4}
                 />
@@ -723,6 +728,12 @@ const PenSlot = ({
 
   const activeRef = useRef<ActiveStroke | null>(null)
   const seqRef = useRef(0)
+  /**
+   * このペンで今まで描いた総点数（このクライアントセッション内で単調増加）。
+   * 新しいストロークを描き始める瞬間のhueOffsetにする＝虹の色相が前のストロークの
+   * 続きから始まる（QvPenは同一TrailRenderer/Gradientを使い回すため自然に継続する。実測確認済み）
+   */
+  const nextHueOffset = useRef(0)
   const tip = useRef(new Vector3())
   const lastPt = useRef(new Vector3())
   const pressAnchor = useRef(new Vector3())
@@ -759,7 +770,7 @@ const PenSlot = ({
       return
     }
     if (a.sent < a.count) {
-      emitSeg({ sid: a.sid, color: a.color, off: a.sent, pts: s.pts.slice(a.sent * 3, a.count * 3) })
+      emitSeg({ sid: a.sid, color: a.color, off: a.sent, pts: s.pts.slice(a.sent * 3, a.count * 3), hueOffset: a.hueOffset })
     }
     emitEnd({ sid: a.sid })
     store.markFinished(a.sid)
@@ -904,8 +915,9 @@ const PenSlot = ({
     for (const s of store.all()) {
       const pts = s.pts
       let touched = false
-      const runs: number[][] = []
+      const runs: { pts: number[]; start: number }[] = []
       let cur: number[] = []
+      let curStart = 0
       for (let i = 0; i + 2 < pts.length; i += 3) {
         const x = pts[i]
         const y = pts[i + 1]
@@ -914,22 +926,26 @@ const PenSlot = ({
         _erasePt.set(x, y, z)
         if (_erasePt.distanceTo(tip.current) < PARTIAL_ERASE_RADIUS) {
           touched = true
-          if (cur.length >= 6) runs.push(cur)
+          if (cur.length >= 6) runs.push({ pts: cur, start: curStart })
           cur = []
         } else {
+          if (cur.length === 0) curStart = i / 3
           cur.push(x, y, z)
         }
       }
-      if (cur.length >= 6) runs.push(cur)
+      if (cur.length >= 6) runs.push({ pts: cur, start: curStart })
       if (!touched) continue
-      // 元の線を消し、残り区間を新しい線として配り直す
+      // 元の線を消し、残り区間を新しい線として配り直す。
+      // 虹の色相位相は元ストロークのhueOffset+区間開始位置を引き継ぎ、分割後も続きの色から始まる
+      const baseHue = s.hueOffset ?? 0
       eraseStroke(s.sid)
       for (const run of runs) {
         seqRef.current += 1
         const sid = `${myIdRef.current}:${index}:${Date.now().toString(36)}:${seqRef.current}`
-        store.applySegment(sid, s.color, 0, run)
+        const hueOffset = baseHue + run.start
+        store.applySegment(sid, s.color, 0, run.pts, hueOffset)
         store.markFinished(sid)
-        emitSeg({ sid, color: s.color, off: 0, pts: run })
+        emitSeg({ sid, color: s.color, off: 0, pts: run.pts, hueOffset })
         emitEnd({ sid })
       }
       persistFinished()
@@ -1050,14 +1066,18 @@ const PenSlot = ({
           color,
           count: 0,
           sent: 0,
+          hueOffset: nextHueOffset.current,
         }
         activeRef.current = a
-        store.applySegment(a.sid, a.color, 0, [
-          roundMm(pressAnchor.current.x),
-          roundMm(pressAnchor.current.y),
-          roundMm(pressAnchor.current.z),
-        ])
+        store.applySegment(
+          a.sid,
+          a.color,
+          0,
+          [roundMm(pressAnchor.current.x), roundMm(pressAnchor.current.y), roundMm(pressAnchor.current.z)],
+          a.hueOffset,
+        )
         a.count = 1
+        nextHueOffset.current += 1
         lastPt.current.copy(pressAnchor.current)
       }
       if (a.count >= MAX_POINTS_PER_STROKE) {
@@ -1072,10 +1092,11 @@ const PenSlot = ({
         roundMm(tip.current.z),
       ])
       a.count += 1
+      nextHueOffset.current += 1
       if (a.count - a.sent >= SEG_BATCH_POINTS) {
         const s = store.get(a.sid)
         if (s) {
-          emitSeg({ sid: a.sid, color: a.color, off: a.sent, pts: s.pts.slice(a.sent * 3, a.count * 3) })
+          emitSeg({ sid: a.sid, color: a.color, off: a.sent, pts: s.pts.slice(a.sent * 3, a.count * 3), hueOffset: a.hueOffset })
           a.sent = a.count
         }
       }

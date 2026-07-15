@@ -6,6 +6,12 @@ export interface Stroke {
   sid: string
   color: string
   pts: number[]
+  /**
+   * 虹ペンの色相位相オフセット（元の点単位）。部分消しで線が分割されても、
+   * 残り区間が「切られる前の続き」の色から始まるようにするための基準点。
+   * 新規に描き始めたストロークは常に0
+   */
+  hueOffset: number
 }
 
 /** 描画中ストロークの増分同期イベント。off は点単位（floatではない）の書き込み開始位置 */
@@ -14,6 +20,8 @@ export interface SegEvent {
   color: string
   off: number
   pts: number[]
+  /** 新規ストローク作成時（off===0）のみ意味を持つ。省略時は0 */
+  hueOffset?: number
 }
 
 export interface EndEvent {
