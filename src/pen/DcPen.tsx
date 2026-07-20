@@ -163,12 +163,12 @@ function rainbowVertexColors(n: number, indexOffset: number): [number, number, n
 }
 
 /** 虹の頂点色キャッシュ。毎レンダーで新配列を渡すとdrei Lineがジオメトリを作り直してしまうため */
-const _rainbowCache = new Map<string, { n: number; off: number; colors: [number, number, number][] }>()
+const rainbowColorsCache = new Map<string, { n: number; off: number; colors: [number, number, number][] }>()
 function rainbowColorsCached(key: string, n: number, off: number): [number, number, number][] {
-  const hit = _rainbowCache.get(key)
+  const hit = rainbowColorsCache.get(key)
   if (hit && hit.n === n && hit.off === off) return hit.colors
   const colors = rainbowVertexColors(n, off)
-  _rainbowCache.set(key, { n, off, colors })
+  rainbowColorsCache.set(key, { n, off, colors })
   return colors
 }
 
@@ -199,8 +199,8 @@ function pruneStrokeCaches(liveKeys: Set<string>) {
   if (_smoothCache.size > liveKeys.size * 2 + 16) {
     for (const k of _smoothCache.keys()) if (!liveKeys.has(k)) _smoothCache.delete(k)
   }
-  if (_rainbowCache.size > liveKeys.size * 2 + 16) {
-    for (const k of _rainbowCache.keys()) if (!liveKeys.has(k)) _rainbowCache.delete(k)
+  if (rainbowColorsCache.size > liveKeys.size * 2 + 16) {
+    for (const k of rainbowColorsCache.keys()) if (!liveKeys.has(k)) rainbowColorsCache.delete(k)
   }
 }
 
