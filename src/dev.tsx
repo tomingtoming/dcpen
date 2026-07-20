@@ -80,7 +80,8 @@ const XRiftDevBridge = ({ children }: { children: ReactNode }) => {
 
 const App = () => (
   <DevEnvironment camera={{ position: [0, 1.3, 3.4] }} spawnPosition={[0, 1, 3.4]}>
-    {xrTest && <XrTestProbe />}
+    {/* 自動テストはXR/デスクトップ両モードでsceneを検分する（devビルド専用ファイル） */}
+    <XrTestProbe />
     <XRiftDevBridge>
       <ItemProvider id="dev-pen-item">
         <PlacementStateProvider mode={placementMode}>

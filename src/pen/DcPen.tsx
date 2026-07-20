@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { MutableRefObject, ReactNode } from 'react'
 import { createPortal, useFrame, useThree } from '@react-three/fiber'
 import { Line, Text } from '@react-three/drei'
@@ -74,6 +74,13 @@ const ERASE_RADIUS = 0.07
 const PARTIAL_ERASE_RADIUS = 0.04
 /** トリガー/クリックのダブルクリック判定（QvPen: clickTimeInterval = 0.2s） */
 const DOUBLE_CLICK_MS = 200
+/**
+ * 遅参者向け全量スナップショット書き込みの間引き窓。
+ * setPersistedは差分でなく毎回フル値（全ストローク）を全員へ送るため、確定のたびに
+ * 送ると盤面が育つほど全参加者が重くなる。現参加者への伝搬は seg/end/undo/clear
+ * イベントが担っているので、スナップショットは遅らせてよい
+ */
+const PERSIST_DEBOUNCE_MS = 3000
 
 /** dev環境の自動テスト用フック。本番では渡されない */
 export interface DcPenDebugApi {
@@ -155,6 +162,16 @@ function rainbowVertexColors(n: number, indexOffset: number): [number, number, n
   return out
 }
 
+/** 虹の頂点色キャッシュ。毎レンダーで新配列を渡すとdrei Lineがジオメトリを作り直してしまうため */
+const _rainbowCache = new Map<string, { n: number; off: number; colors: [number, number, number][] }>()
+function rainbowColorsCached(key: string, n: number, off: number): [number, number, number][] {
+  const hit = _rainbowCache.get(key)
+  if (hit && hit.n === n && hit.off === off) return hit.colors
+  const colors = rainbowVertexColors(n, off)
+  _rainbowCache.set(key, { n, off, colors })
+  return colors
+}
+
 /**
  * 描画専用の平滑化＝同期点列(MIN_SEGMENT間隔)をCatmull-Romで通過補間して細分する。
  * 同期・保存・消しゴム判定はすべて元の点列のまま＝見た目だけ滑らか（帯域ゼロ増）。
@@ -178,12 +195,38 @@ function smoothPoints(key: string, raw: [number, number, number][]): [number, nu
   return pts
 }
 /** 消えたストロークのキャッシュを間引く（合計線数の2倍を超えたら現存分だけ残す） */
-function pruneSmoothCache(liveKeys: Set<string>) {
-  if (_smoothCache.size <= liveKeys.size * 2 + 16) return
-  for (const k of _smoothCache.keys()) {
-    if (!liveKeys.has(k)) _smoothCache.delete(k)
+function pruneStrokeCaches(liveKeys: Set<string>) {
+  if (_smoothCache.size > liveKeys.size * 2 + 16) {
+    for (const k of _smoothCache.keys()) if (!liveKeys.has(k)) _smoothCache.delete(k)
+  }
+  if (_rainbowCache.size > liveKeys.size * 2 + 16) {
+    for (const k of _rainbowCache.keys()) if (!liveKeys.has(k)) _rainbowCache.delete(k)
   }
 }
+
+/**
+ * ストローク1本の描画。storeはptsをin-place変異させるため、伸びはcount（点数）で
+ * 検知する。memoにより無関係な再レンダー（他人のseg受信ごとのbump等）では
+ * toTuples・スプライン再計算・ジオメトリ再構築を一切走らせない
+ */
+const StrokeLine = memo(
+  ({ cacheKey, stroke }: { cacheKey: string; stroke: Stroke; count: number }) => {
+    const raw = toTuples(stroke.pts)
+    if (raw.length < 2) return null
+    const pts = smoothPoints(cacheKey, raw)
+    if (stroke.color === RAINBOW) {
+      return (
+        <Line
+          points={pts}
+          vertexColors={rainbowColorsCached(cacheKey, pts.length, (stroke.hueOffset ?? 0) * SMOOTH_DIV)}
+          color="#ffffff"
+          lineWidth={4}
+        />
+      )
+    }
+    return <Line points={pts} color={stroke.color} lineWidth={4} />
+  },
+)
 
 interface ActiveStroke {
   sid: string
@@ -256,9 +299,35 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
     bump()
   })
 
-  const persistFinished = useCallback(() => {
+  /**
+   * 遅参者向け全量スナップショット。予約式（trailing throttle）＝窓内の連続変更
+   * （描き終わり連発・消しゴム掃きの毎フレームヒット等）を1回の書き込みにまとめる
+   */
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const persistNow = useCallback(() => {
+    if (persistTimer.current !== null) {
+      clearTimeout(persistTimer.current)
+      persistTimer.current = null
+    }
     setPersisted(store.finishedStrokes())
   }, [setPersisted, store])
+  const persistFinished = useCallback(() => {
+    if (persistTimer.current !== null) return
+    persistTimer.current = setTimeout(() => {
+      persistTimer.current = null
+      setPersisted(store.finishedStrokes())
+    }, PERSIST_DEBOUNCE_MS)
+  }, [setPersisted, store])
+  useEffect(
+    () => () => {
+      if (persistTimer.current !== null) clearTimeout(persistTimer.current)
+    },
+    [],
+  )
+  // 書き込み予約が保留のまま誰かが入室したら即時flush（遅参者に窓の分の線を取りこぼさせない）
+  useInstanceEvent<unknown>('user-joined', () => {
+    if (persistTimer.current !== null) persistNow()
+  })
 
   // ---- 自分の線のundoスタック（どの色のペンで描いたかは問わない） ----
   const undoStack = useRef<string[]>([])
@@ -277,10 +346,10 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
   const clearAll = useCallback(() => {
     store.clear()
     emitClear({})
-    setPersisted([])
+    persistNow()
     undoStack.current = []
     bump()
-  }, [store, emitClear, setPersisted, bump])
+  }, [store, emitClear, persistNow, bump])
 
   /** 消しゴム/色別Clearが線を消すときの共通処理（自他問わず） */
   const eraseStroke = useCallback(
@@ -402,7 +471,7 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
 
   // ---- レイアウト（QvPenのラック風・机なし空中固定） ----
   const strokes = store.all()
-  pruneSmoothCache(new Set(strokes.map((s) => `${SYNC_ID}|${s.sid}`)))
+  pruneStrokeCaches(new Set(strokes.map((s) => `${SYNC_ID}|${s.sid}`)))
   const penX = (i: number) => (i - (PEN_COUNT - 1) / 2) * 0.17
   const eraserX = (i: number) => penX(PEN_COUNT - 1) + 0.32 + i * 0.13
 
@@ -528,23 +597,9 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
       {/* ストロークはワールド座標なのでシーン直下に描く（描画時のみスプライン細分） */}
       {createPortal(
         <group>
-          {strokes.map((s) => {
-            const raw = toTuples(s.pts)
-            if (raw.length < 2) return null
-            const pts = smoothPoints(`${SYNC_ID}|${s.sid}`, raw)
-            if (s.color === RAINBOW) {
-              return (
-                <Line
-                  key={s.sid}
-                  points={pts}
-                  vertexColors={rainbowVertexColors(pts.length, (s.hueOffset ?? 0) * SMOOTH_DIV)}
-                  color="#ffffff"
-                  lineWidth={4}
-                />
-              )
-            }
-            return <Line key={s.sid} points={pts} color={s.color} lineWidth={4} />
-          })}
+          {strokes.map((s) => (
+            <StrokeLine key={s.sid} cacheKey={`${SYNC_ID}|${s.sid}`} stroke={s} count={s.pts.length} />
+          ))}
         </group>,
         scene,
       )}
