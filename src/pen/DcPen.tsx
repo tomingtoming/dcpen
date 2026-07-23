@@ -88,6 +88,8 @@ export interface DcPenDebugApi {
   clear: () => void
   strokeCount: () => number
   strokeColors: () => string[]
+  /** 完成形ストロークの直接投入（サムネイル撮影・自動テストの舞台設営用） */
+  inject: (strokes: Stroke[]) => void
 }
 
 export interface DcPenProps {
@@ -383,8 +385,12 @@ export const DcPen = ({ position = [0, 0, 0], rotationY = 0, syncId = 'dcpen', d
       clear: clearAll,
       strokeCount: () => store.all().length,
       strokeColors: () => store.all().map((s) => s.color),
+      inject: (strokes) => {
+        store.merge(strokes)
+        bump()
+      },
     })
-  }, [debugApi, doUndo, clearAll, store])
+  }, [debugApi, doUndo, clearAll, store, bump])
 
   // ---- 入力（手ごとに1系統。どのスロットが反応するかは各スロットが判断） ----
   // 注意: キーボードは使えない（プレイヤー移動系がwindowのkeydown/keyupを独占）

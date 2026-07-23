@@ -8,6 +8,7 @@
 import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
+import * as THREE from 'three'
 import { useThree } from '@react-three/fiber'
 import { RigidBody } from '@react-three/rapier'
 import {
@@ -51,6 +52,7 @@ const XrTestProbe = () => {
     w.__gl = gl
     w.__scene = scene
     w.__camera = camera
+    w.__THREE = THREE
   }, [gl, scene, camera])
   return null
 }
